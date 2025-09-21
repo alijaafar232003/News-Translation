@@ -6,6 +6,14 @@ import { NewMessage, NewMessageEvent } from "telegram/events";
 import { writeFile, readFile } from "fs/promises";
 import { existsSync } from "fs";
 import { createServer } from "http";
+// ADD near the top (after imports)
+function readSessionFromEnv(): string {
+  const s = process.env.SESSION?.trim() || "";
+  if (s) return s;
+  const b64 = process.env.SESSION_B64?.trim();
+  return b64 ? Buffer.from(b64, "base64").toString("utf8") : "";
+}
+
 
 // --- Configuration ---
 const apiId = Number(process.env.API_ID);
@@ -139,30 +147,34 @@ async function main() {
   });
   server.listen(process.env.PORT || 3000);
 
-  // Load session
-  let sessionString = "";
-  if (existsSync("./session.txt")) {
-    sessionString = await readFile("./session.txt", "utf8").catch(() => "");
-  }
+// Load session
+let sessionString = process.env.SESSION?.trim() || "";
+if (!sessionString && existsSync("./session.txt")) {
+  sessionString = await readFile("./session.txt", "utf8").catch(() => "");
+}
+
 
   client = new TelegramClient(new StringSession(sessionString), apiId, apiHash, {
     connectionRetries: 5
   });
 
   // Login if needed
-  if (!sessionString) {
-    await client.start({
-      phoneNumber: async () => await ask("Phone: "),
-      password: async () => await ask("2FA (optional): "),
-      phoneCode: async () => await ask("Code: "),
-      onError: console.error,
-    });
-    
-    await writeFile("./session.txt", (client.session as StringSession).save(), "utf8");
-    await rl.close();
-  } else {
-    await client.connect();
+if (!sessionString) {
+  // In prod there is no TTY; fail fast instead of hanging
+  if (process.env.NODE_ENV === "production" || process.env.CI) {
+    throw new Error("Missing Telegram SESSION. Set the SESSION env var.");
   }
+  await client.start({
+    phoneNumber: async () => await ask("Phone: "),
+    password: async () => await ask("2FA (optional): "),
+    phoneCode: async () => await ask("Code: "),
+    onError: console.error,
+  });
+  await writeFile("./session.txt", (client.session as StringSession).save(), "utf8");
+  await rl.close();
+} else {
+  await client.connect();
+}
 
   const destEntity = await client.getEntity(DEST);
 
