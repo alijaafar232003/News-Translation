@@ -25,6 +25,16 @@ const SOURCES = (process.env.SOURCE_CHANNELS || "")
 const DEST = process.env.DEST_CHANNEL!;
 const TRANSLATE_BOT = "YTranslateBot";
 
+// --- Channel Name Mapping (Hebrew to Arabic) ---
+const CHANNEL_NAMES: { [key: string]: string } = {
+  // Add your channel mappings here
+  // Example:
+  // "חדשות 12": "أخبار 12",
+  // "כאן חדשות": "كان نيوز",
+  // "ישראל היום": "إسرائيل اليوم",
+  // Add more mappings as needed
+};
+
 // --- Utilities ---
 const rl = createInterface({ input: process.stdin, output: process.stdout });
 const ask = (q: string) => rl.question(q);
@@ -99,13 +109,15 @@ async function processAlbum(messages: any[]) {
   const translatedText = originalText ? await translateWithBot(originalText) : "";
 
   const peer = await messages[0].getChat();
+  const channelTitle = (peer as any).title || "";
   const username = "username" in (peer as any) && (peer as any).username 
     ? String((peer as any).username).toLowerCase() 
     : "";
-  const link = username ? `https://t.me/${username}/${messages[0].id}` : "";
 
   const caption = translatedText || originalText;
-  const fullCaption = caption ? `${caption}\n\nالمصدر: ${link}` : `المصدر: ${link}`;
+  // Use Arabic name from mapping, fallback to title, then username
+  const sourceName = CHANNEL_NAMES[channelTitle] || channelTitle || username || "Unknown";
+  const fullCaption = caption ? `${caption}\n\nالمصدر: ${sourceName}` : `المصدر: ${sourceName}`;
 
   try {
     const destEntity = await client.getEntity(DEST);
@@ -184,6 +196,7 @@ if (!sessionString) {
     if (!msg) return;
 
     const peer = await msg.getChat();
+    const channelTitle = (peer as any).title || "";
     const username = "username" in (peer as any) && (peer as any).username 
       ? String((peer as any).username).toLowerCase() 
       : "";
@@ -245,9 +258,10 @@ if (!sessionString) {
     const originalText = msg.message?.trim() || "";
     const translatedText = originalText ? await translateWithBot(originalText) : "";
     
-    const link = username ? `https://t.me/${username}/${msg.id}` : "";
+    // Use Arabic name from mapping, fallback to title, then username
+    const sourceName = CHANNEL_NAMES[channelTitle] || channelTitle || username || "Unknown";
     const caption = translatedText || originalText;
-    const fullCaption = caption ? `${caption}\n\nالمصدر: ${link}` : `المصدر: ${link}`;
+    const fullCaption = caption ? `${caption}\n\nالمصدر: ${sourceName}` : `المصدر: ${sourceName}`;
 
     try {
       if (msg.media) {
