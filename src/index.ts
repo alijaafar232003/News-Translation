@@ -25,16 +25,6 @@ const SOURCES = (process.env.SOURCE_CHANNELS || "")
 const DEST = process.env.DEST_CHANNEL!;
 const TRANSLATE_BOT = "YTranslateBot";
 
-// --- Channel Name Mapping (Hebrew to Arabic) ---
-const CHANNEL_NAMES: { [key: string]: string } = {
-  // Add your channel mappings here
-  // Example:
-  // "חדשות 12": "أخبار 12",
-  // "כאן חדשות": "كان نيوز",
-  // "ישראל היום": "إسرائيل اليوم",
-  // Add more mappings as needed
-};
-
 // --- Utilities ---
 const rl = createInterface({ input: process.stdin, output: process.stdout });
 const ask = (q: string) => rl.question(q);
@@ -62,7 +52,12 @@ const pendingTranslations = new Map<string, {
 }>();
 
 async function translateWithBot(text: string): Promise<string> {
-  if (!text?.trim()) return text;
+  if (!text?.trim()) {
+    console.log("❌ Empty text - returning as is");
+    return text;
+  }
+  
+  console.log(`📝 Checking text: "${text.substring(0, 50)}..."`);
   
   if (!hasHebrew(text)) {
     console.log("📝 No Hebrew detected - keeping original");
@@ -115,8 +110,7 @@ async function processAlbum(messages: any[]) {
     : "";
 
   const caption = translatedText || originalText;
-  // Use Arabic name from mapping, fallback to title, then username
-  const sourceName = CHANNEL_NAMES[channelTitle] || channelTitle || username || "Unknown";
+  const sourceName = username || "Unknown";
   const fullCaption = caption ? `${caption}\n\nالمصدر: ${sourceName}` : `المصدر: ${sourceName}`;
 
   try {
@@ -226,7 +220,13 @@ if (!sessionString) {
     }
 
     // Check if from allowed source
-    if (!SOURCES.includes(username)) return;
+    console.log(`📥 Message from: ${username}`);
+    console.log(`🔍 Allowed sources: ${SOURCES.join(", ")}`);
+    if (!SOURCES.includes(username)) {
+      console.log(`❌ Source not allowed - ignoring message`);
+      return;
+    }
+    console.log(`✅ Source allowed - processing message`);
 
     // Handle albums
     if (msg.groupedId) {
@@ -256,12 +256,14 @@ if (!sessionString) {
 
     // Handle individual messages
     const originalText = msg.message?.trim() || "";
+    console.log(`📝 Original text: "${originalText}"`);
     const translatedText = originalText ? await translateWithBot(originalText) : "";
+    console.log(`🔄 Translated text: "${translatedText}"`);
     
-    // Use Arabic name from mapping, fallback to title, then username
-    const sourceName = CHANNEL_NAMES[channelTitle] || channelTitle || username || "Unknown";
+    const sourceName = username || "Unknown";
     const caption = translatedText || originalText;
     const fullCaption = caption ? `${caption}\n\nالمصدر: ${sourceName}` : `المصدر: ${sourceName}`;
+    console.log(`📤 Final caption: "${fullCaption}"`);
 
     try {
       if (msg.media) {
