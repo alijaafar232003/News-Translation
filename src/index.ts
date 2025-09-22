@@ -6,14 +6,6 @@ import { NewMessage, NewMessageEvent } from "telegram/events";
 import { writeFile, readFile } from "fs/promises";
 import { existsSync } from "fs";
 import { createServer } from "http";
-// ADD near the top (after imports)
-function readSessionFromEnv(): string {
-  const s = process.env.SESSION?.trim() || "";
-  if (s) return s;
-  const b64 = process.env.SESSION_B64?.trim();
-  return b64 ? Buffer.from(b64, "base64").toString("utf8") : "";
-}
-
 
 // --- Configuration ---
 const apiId = Number(process.env.API_ID);
@@ -25,25 +17,15 @@ const SOURCES = (process.env.SOURCE_CHANNELS || "")
 const DEST = process.env.DEST_CHANNEL!;
 const TRANSLATE_BOT = "YTranslateBot";
 
-// --- Channel Name Mapping (Hebrew to Arabic) ---
-const CHANNEL_NAMES: { [key: string]: string } = {
-  // Add your channel mappings here
-  // Example:
-  // "חדשות 12": "أخبار 12",
-  // "כאן חדשות": "كان نيوز",
-  // "ישראל היום": "إسرائيل اليوم",
-  // Add more mappings as needed
-};
-
 // --- Utilities ---
 const rl = createInterface({ input: process.stdin, output: process.stdout });
 const ask = (q: string) => rl.question(q);
 
-function isImageDoc(doc: any) {
+function isImageDoc(doc: any): boolean {
   return doc?.mimeType?.startsWith("image/");
 }
 
-function isVideoDoc(doc: any) {
+function isVideoDoc(doc: any): boolean {
   return doc?.mimeType?.startsWith("video/");
 }
 
@@ -62,7 +44,12 @@ const pendingTranslations = new Map<string, {
 }>();
 
 async function translateWithBot(text: string): Promise<string> {
-  if (!text?.trim()) return text;
+  if (!text?.trim()) {
+    console.log("❌ Empty text - returning as is");
+    return text;
+  }
+  
+  console.log(`📝 Checking text: "${text.substring(0, 50)}..."`);
   
   if (!hasHebrew(text)) {
     console.log("📝 No Hebrew detected - keeping original");
@@ -99,9 +86,9 @@ async function translateWithBot(text: string): Promise<string> {
 }
 
 // --- Album Handling ---
-const albumGroups = new Map();
+const albumGroups = new Map<string, { messages: any[]; timeout: NodeJS.Timeout }>();
 
-async function processAlbum(messages: any[]) {
+async function processAlbum(messages: any[]): Promise<void> {
   if (!messages.length) return;
 
   const textMsg = messages.find(msg => msg.message?.trim());
@@ -109,14 +96,12 @@ async function processAlbum(messages: any[]) {
   const translatedText = originalText ? await translateWithBot(originalText) : "";
 
   const peer = await messages[0].getChat();
-  const channelTitle = (peer as any).title || "";
   const username = "username" in (peer as any) && (peer as any).username 
     ? String((peer as any).username).toLowerCase() 
     : "";
 
   const caption = translatedText || originalText;
-  // Use Arabic name from mapping, fallback to title, then username
-  const sourceName = CHANNEL_NAMES[channelTitle] || channelTitle || username || "Unknown";
+  const sourceName = username || "Unknown";
   const fullCaption = caption ? `${caption}\n\nالمصدر: ${sourceName}` : `المصدر: ${sourceName}`;
 
   try {
@@ -151,7 +136,7 @@ async function processAlbum(messages: any[]) {
 // --- Main Bot Logic ---
 let client: TelegramClient;
 
-async function main() {
+async function main(): Promise<void> {
   // Health server
   const server = createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -159,34 +144,79 @@ async function main() {
   });
   server.listen(process.env.PORT || 3000);
 
-// Load session
-let sessionString = process.env.SESSION?.trim() || "";
-if (!sessionString && existsSync("./session.txt")) {
-  sessionString = await readFile("./session.txt", "utf8").catch(() => "");
-}
+  // Load session
+  let sessionString = process.env.SESSION?.trim() || "";
+  if (!sessionString) {
+    // Try base64 encoded session
+    const b64Session = process.env.SESSION_B64?.trim();
+    if (b64Session) {
+      sessionString = Buffer.from(b64Session, 'base64').toString('utf8');
+      console.log("🔑 Using base64 decoded session");
+    }
+  }
+  if (!sessionString && existsSync("./session.txt")) {
+    sessionString = await readFile("./session.txt", "utf8").catch(() => "");
+  }
 
+  // Clear invalid session
+  if (sessionString) {
+    console.log("🔑 Found existing session, testing validity...");
+  } else {
+    console.log("🔑 No existing session found");
+  }
 
   client = new TelegramClient(new StringSession(sessionString), apiId, apiHash, {
     connectionRetries: 5
   });
 
-  // Login if needed
-if (!sessionString) {
-  // In prod there is no TTY; fail fast instead of hanging
-  if (process.env.NODE_ENV === "production" || process.env.CI) {
-    throw new Error("Missing Telegram SESSION. Set the SESSION env var.");
+  // Login if needed or if session is invalid
+  if (!sessionString) {
+    console.log("🔑 No session found - starting fresh login...");
+    // In prod there is no TTY; fail fast instead of hanging
+    if (process.env.NODE_ENV === "production" || process.env.CI) {
+      throw new Error("Missing Telegram SESSION. Set the SESSION env var.");
+    }
+    await client.start({
+      phoneNumber: async () => await ask("Phone: "),
+      password: async () => await ask("2FA (optional): "),
+      phoneCode: async () => await ask("Code: "),
+      onError: console.error,
+    });
+    await writeFile("./session.txt", (client.session as StringSession).save(), "utf8");
+    await rl.close();
+  } else {
+    console.log("🔑 Trying to connect with existing session...");
+    try {
+      await client.connect();
+      console.log("✅ Session valid - connected successfully");
+    } catch (error: any) {
+      console.log("❌ Session invalid - starting fresh login...");
+      console.log("Error:", error.message);
+      
+      // Clear invalid session
+      sessionString = "";
+      client = new TelegramClient(new StringSession(""), apiId, apiHash, {
+        connectionRetries: 5
+      });
+      
+      // In prod there is no TTY; fail fast instead of hanging
+      if (process.env.NODE_ENV === "production" || process.env.CI) {
+        throw new Error("Invalid Telegram SESSION. Delete SESSION env var and set a new one.");
+      }
+      
+      await client.start({
+        phoneNumber: async () => await ask("Phone: "),
+        password: async () => await ask("2FA (optional): "),
+        phoneCode: async () => await ask("Code: "),
+        onError: console.error,
+      });
+      
+      // Save new session
+      await writeFile("./session.txt", (client.session as StringSession).save(), "utf8");
+      console.log("✅ New session saved");
+      await rl.close();
+    }
   }
-  await client.start({
-    phoneNumber: async () => await ask("Phone: "),
-    password: async () => await ask("2FA (optional): "),
-    phoneCode: async () => await ask("Code: "),
-    onError: console.error,
-  });
-  await writeFile("./session.txt", (client.session as StringSession).save(), "utf8");
-  await rl.close();
-} else {
-  await client.connect();
-}
 
   const destEntity = await client.getEntity(DEST);
 
@@ -196,7 +226,6 @@ if (!sessionString) {
     if (!msg) return;
 
     const peer = await msg.getChat();
-    const channelTitle = (peer as any).title || "";
     const username = "username" in (peer as any) && (peer as any).username 
       ? String((peer as any).username).toLowerCase() 
       : "";
@@ -226,14 +255,20 @@ if (!sessionString) {
     }
 
     // Check if from allowed source
-    if (!SOURCES.includes(username)) return;
+    console.log(`📥 Message from: ${username}`);
+    console.log(`🔍 Allowed sources: ${SOURCES.join(", ")}`);
+    if (!SOURCES.includes(username)) {
+      console.log(`❌ Source not allowed - ignoring message`);
+      return;
+    }
+    console.log(`✅ Source allowed - processing message`);
 
     // Handle albums
     if (msg.groupedId) {
       const groupKey = `${msg.chatId}_${msg.groupedId}`;
       
       if (albumGroups.has(groupKey)) {
-        const group = albumGroups.get(groupKey);
+        const group = albumGroups.get(groupKey)!;
         group.messages.push(msg);
         clearTimeout(group.timeout);
         group.timeout = setTimeout(() => {
@@ -256,12 +291,14 @@ if (!sessionString) {
 
     // Handle individual messages
     const originalText = msg.message?.trim() || "";
+    console.log(`📝 Original text: "${originalText}"`);
     const translatedText = originalText ? await translateWithBot(originalText) : "";
+    console.log(`🔄 Translated text: "${translatedText}"`);
     
-    // Use Arabic name from mapping, fallback to title, then username
-    const sourceName = CHANNEL_NAMES[channelTitle] || channelTitle || username || "Unknown";
+    const sourceName = username || "Unknown";
     const caption = translatedText || originalText;
     const fullCaption = caption ? `${caption}\n\nالمصدر: ${sourceName}` : `المصدر: ${sourceName}`;
+    console.log(`📤 Final caption: "${fullCaption}"`);
 
     try {
       if (msg.media) {
