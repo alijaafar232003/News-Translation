@@ -52,12 +52,7 @@ const pendingTranslations = new Map<string, {
 }>();
 
 async function translateWithBot(text: string): Promise<string> {
-  if (!text?.trim()) {
-    console.log("❌ Empty text - returning as is");
-    return text;
-  }
-  
-  console.log(`📝 Checking text: "${text.substring(0, 50)}..."`);
+  if (!text?.trim()) return text;
   
   if (!hasHebrew(text)) {
     console.log("📝 No Hebrew detected - keeping original");
@@ -104,14 +99,13 @@ async function processAlbum(messages: any[]) {
   const translatedText = originalText ? await translateWithBot(originalText) : "";
 
   const peer = await messages[0].getChat();
-  const channelTitle = (peer as any).title || "";
   const username = "username" in (peer as any) && (peer as any).username 
     ? String((peer as any).username).toLowerCase() 
     : "";
+  const link = username ? `https://t.me/${username}/${messages[0].id}` : "";
 
   const caption = translatedText || originalText;
-  const sourceName = username || "Unknown";
-  const fullCaption = caption ? `${caption}\n\nالمصدر: ${sourceName}` : `المصدر: ${sourceName}`;
+  const fullCaption = caption ? `${caption}\n\nالمصدر: ${link}` : `المصدر: ${link}`;
 
   try {
     const destEntity = await client.getEntity(DEST);
@@ -190,7 +184,6 @@ if (!sessionString) {
     if (!msg) return;
 
     const peer = await msg.getChat();
-    const channelTitle = (peer as any).title || "";
     const username = "username" in (peer as any) && (peer as any).username 
       ? String((peer as any).username).toLowerCase() 
       : "";
@@ -220,13 +213,7 @@ if (!sessionString) {
     }
 
     // Check if from allowed source
-    console.log(`📥 Message from: ${username}`);
-    console.log(`🔍 Allowed sources: ${SOURCES.join(", ")}`);
-    if (!SOURCES.includes(username)) {
-      console.log(`❌ Source not allowed - ignoring message`);
-      return;
-    }
-    console.log(`✅ Source allowed - processing message`);
+    if (!SOURCES.includes(username)) return;
 
     // Handle albums
     if (msg.groupedId) {
@@ -256,14 +243,11 @@ if (!sessionString) {
 
     // Handle individual messages
     const originalText = msg.message?.trim() || "";
-    console.log(`📝 Original text: "${originalText}"`);
     const translatedText = originalText ? await translateWithBot(originalText) : "";
-    console.log(`🔄 Translated text: "${translatedText}"`);
     
-    const sourceName = username || "Unknown";
+    const link = username ? `https://t.me/${username}/${msg.id}` : "";
     const caption = translatedText || originalText;
-    const fullCaption = caption ? `${caption}\n\nالمصدر: ${sourceName}` : `المصدر: ${sourceName}`;
-    console.log(`📤 Final caption: "${fullCaption}"`);
+    const fullCaption = caption ? `${caption}\n\nالمصدر: ${link}` : `المصدر: ${link}`;
 
     try {
       if (msg.media) {
